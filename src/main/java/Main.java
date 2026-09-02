@@ -59,6 +59,27 @@ public class Main {
                                 .build())
                         .build())
                 .build();
+                ChatCompletionTool writeTool = ChatCompletionTool.builder()
+                    .type(JsonValue.from("function"))
+                    .function(FunctionDefinition.builder()
+                        .name("Write")
+                        .description("Write content to a file")
+                        .parameters(FunctionParameters.builder()
+                            .putAdditionalProperty("type", JsonValue.from("object"))
+                            .putAdditionalProperty("required", JsonValue.from(List.of("file_path", "content")))
+                            .putAdditionalProperty("properties", JsonValue.from(Map.of(
+                                "file_path", Map.of(
+                                    "type", "string",
+                                    "description", "The path of the file to write to"
+                                ),
+                                "content", Map.of(
+                                    "type", "string",
+                                    "description", "The content of the file to write"
+                                )
+                            )))
+                            .build())
+                        .build())
+                    .build();
 
         List<ChatCompletionMessageParam> messages = new ArrayList<>();
         messages.add(ChatCompletionMessageParam.ofUser(
@@ -71,6 +92,7 @@ public class Main {
                             .model("anthropic/claude-haiku-4.5")
                             .messages(messages)
                             .addTool(readTool)
+                            .addTool(writeTool)
                             .build()
             );
 
@@ -88,13 +110,23 @@ public class Main {
             }
 
             for (var toolCall : toolCalls.get()) {
-                if (!"Read".equals(toolCall.function().name())) {
+                JsonNode arguments = objectMapper.readTree(toolCall.function().arguments());
+                String filePath = arguments.get("file_path").asText();
+                String result;
+                if ("Read".equals(toolCall.function().name())) {
+                    result = Files.readString(Path.of(filePath));
+                } else if ("Write".equals(toolCall.function().name())) {
+                    String content = arguments.get("content").asText();
+                    Path path = Path.of(filePath);
+                    if (path.getParent() != null) {
+                        Files.createDirectories(path.getParent());
+                    }
+                    Files.writeString(path, content);
+                    result = "File written successfully";
+                } else {
                     throw new RuntimeException("unsupported tool: " + toolCall.function().name());
                 }
 
-                JsonNode arguments = objectMapper.readTree(toolCall.function().arguments());
-                String filePath = arguments.get("file_path").asText();
-                String result = Files.readString(Path.of(filePath));
                 messages.add(ChatCompletionMessageParam.ofTool(
                     ChatCompletionToolMessageParam.builder()
                         .toolCallId(toolCall.id())
