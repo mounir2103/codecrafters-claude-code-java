@@ -61,7 +61,8 @@ public class Main {
                 .build();
 
         List<ChatCompletionMessageParam> messages = new ArrayList<>();
-        messages.add(ChatCompletionUserMessageParam.builder().content(prompt).build());
+        messages.add(ChatCompletionMessageParam.ofUser(
+            ChatCompletionUserMessageParam.builder().content(prompt).build()));
         ObjectMapper objectMapper = new ObjectMapper();
 
         while (true) {
@@ -78,7 +79,7 @@ public class Main {
             }
 
             var message = response.choices().get(0).message();
-            messages.add(message.toParam());
+            messages.add(ChatCompletionMessageParam.ofAssistant(message.toParam()));
 
             var toolCalls = message.toolCalls();
             if (toolCalls.isEmpty() || toolCalls.get().isEmpty()) {
@@ -94,10 +95,11 @@ public class Main {
                 JsonNode arguments = objectMapper.readTree(toolCall.function().arguments());
                 String filePath = arguments.get("file_path").asText();
                 String result = Files.readString(Path.of(filePath));
-                messages.add(ChatCompletionToolMessageParam.builder()
+                messages.add(ChatCompletionMessageParam.ofTool(
+                    ChatCompletionToolMessageParam.builder()
                         .toolCallId(toolCall.id())
                         .content(result)
-                        .build());
+                        .build()));
             }
         }
     }
