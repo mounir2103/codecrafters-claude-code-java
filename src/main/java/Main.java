@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 
 public class Main {
     public static void main(String[] args) throws Exception {
@@ -59,6 +60,23 @@ public class Main {
                                 .build())
                         .build())
                 .build();
+                    ChatCompletionTool bashTool = ChatCompletionTool.builder()
+                        .type(JsonValue.from("function"))
+                        .function(FunctionDefinition.builder()
+                            .name("Bash")
+                            .description("Execute a shell command")
+                            .parameters(FunctionParameters.builder()
+                                .putAdditionalProperty("type", JsonValue.from("object"))
+                                .putAdditionalProperty("required", JsonValue.from(List.of("command")))
+                                .putAdditionalProperty("properties", JsonValue.from(Map.of(
+                                    "command", Map.of(
+                                        "type", "string",
+                                        "description", "The command to execute"
+                                    )
+                                )))
+                                .build())
+                            .build())
+                        .build();
                 ChatCompletionTool writeTool = ChatCompletionTool.builder()
                     .type(JsonValue.from("function"))
                     .function(FunctionDefinition.builder()
@@ -93,6 +111,7 @@ public class Main {
                             .messages(messages)
                             .addTool(readTool)
                             .addTool(writeTool)
+                            .addTool(bashTool)
                             .build()
             );
 
@@ -111,11 +130,12 @@ public class Main {
 
             for (var toolCall : toolCalls.get()) {
                 JsonNode arguments = objectMapper.readTree(toolCall.function().arguments());
-                String filePath = arguments.get("file_path").asText();
                 String result;
                 if ("Read".equals(toolCall.function().name())) {
+                    String filePath = arguments.get("file_path").asText();
                     result = Files.readString(Path.of(filePath));
                 } else if ("Write".equals(toolCall.function().name())) {
+                    String filePath = arguments.get("file_path").asText();
                     String content = arguments.get("content").asText();
                     Path path = Path.of(filePath);
                     if (path.getParent() != null) {
@@ -123,6 +143,16 @@ public class Main {
                     }
                     Files.writeString(path, content);
                     result = "File written successfully";
+                } else if ("Bash".equals(toolCall.function().name())) {
+                    Process process = new ProcessBuilder("/bin/bash", "-c", arguments.get("command").asText())
+                            .directory(Path.of(".").toFile())
+                            .redirectErrorStream(true)
+                            .start();
+                    result = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                    int exitCode = process.waitFor();
+                    if (exitCode != 0) {
+                        result = "Command failed with exit code " + exitCode + "\n" + result;
+                    }
                 } else {
                     throw new RuntimeException("unsupported tool: " + toolCall.function().name());
                 }
