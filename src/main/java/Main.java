@@ -7,8 +7,12 @@ import com.openai.models.FunctionDefinition;
 import com.openai.models.FunctionParameters;
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
+import com.openai.models.chat.completions.ChatCompletionMessageParam;
 import com.openai.models.chat.completions.ChatCompletionTool;
+import com.openai.models.chat.completions.ChatCompletionToolMessageParam;
+import com.openai.models.chat.completions.ChatCompletionUserMessageParam;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.nio.file.Files;
@@ -38,49 +42,63 @@ public class Main {
                 .baseUrl(baseUrl)
                 .build();
 
-        ChatCompletion response = client.chat().completions().create(
-                ChatCompletionCreateParams.builder()
-                        .model("anthropic/claude-haiku-4.5")
-                        .addUserMessage(prompt)
-                    .addTool(ChatCompletionTool.builder()
-                        .type(JsonValue.from("function"))
-                        .function(FunctionDefinition.builder()
-                            .name("Read")
-                            .description("Read and return the contents of a file")
-                            .parameters(FunctionParameters.builder()
+        ChatCompletionTool readTool = ChatCompletionTool.builder()
+                .type(JsonValue.from("function"))
+                .function(FunctionDefinition.builder()
+                        .name("Read")
+                        .description("Read and return the contents of a file")
+                        .parameters(FunctionParameters.builder()
                                 .putAdditionalProperty("type", JsonValue.from("object"))
                                 .putAdditionalProperty("properties", JsonValue.from(Map.of(
-                                    "file_path", Map.of(
-                                        "type", "string",
-                                        "description", "The path to the file to read"
-                                    )
+                                        "file_path", Map.of(
+                                                "type", "string",
+                                                "description", "The path to the file to read"
+                                        )
                                 )))
                                 .putAdditionalProperty("required", JsonValue.from(List.of("file_path")))
                                 .build())
-                            .build())
                         .build())
-                        .build()
-        );
+                .build();
 
-        if (response.choices().isEmpty()) {
-            throw new RuntimeException("no choices in response");
-        }
+        List<ChatCompletionMessageParam> messages = new ArrayList<>();
+        messages.add(ChatCompletionUserMessageParam.builder().content(prompt).build());
+        ObjectMapper objectMapper = new ObjectMapper();
 
-        var message = response.choices().get(0).message();
-        var toolCalls = message.toolCalls();
-        if (toolCalls.isPresent() && !toolCalls.get().isEmpty()) {
-            var toolCall = toolCalls.get().get(0);
-            if ("Read".equals(toolCall.function().name())) {
-                JsonNode arguments = new ObjectMapper().readTree(toolCall.function().arguments());
-                String filePath = arguments.get("file_path").asText();
-                System.out.print(Files.readString(Path.of(filePath)));
+        while (true) {
+            ChatCompletion response = client.chat().completions().create(
+                    ChatCompletionCreateParams.builder()
+                            .model("anthropic/claude-haiku-4.5")
+                            .messages(messages)
+                            .addTool(readTool)
+                            .build()
+            );
+
+            if (response.choices().isEmpty()) {
+                throw new RuntimeException("no choices in response");
+            }
+
+            var message = response.choices().get(0).message();
+            messages.add(message.toParam());
+
+            var toolCalls = message.toolCalls();
+            if (toolCalls.isEmpty() || toolCalls.get().isEmpty()) {
+                System.out.print(message.content().orElse(""));
                 return;
             }
+
+            for (var toolCall : toolCalls.get()) {
+                if (!"Read".equals(toolCall.function().name())) {
+                    throw new RuntimeException("unsupported tool: " + toolCall.function().name());
+                }
+
+                JsonNode arguments = objectMapper.readTree(toolCall.function().arguments());
+                String filePath = arguments.get("file_path").asText();
+                String result = Files.readString(Path.of(filePath));
+                messages.add(ChatCompletionToolMessageParam.builder()
+                        .toolCallId(toolCall.id())
+                        .content(result)
+                        .build());
+            }
         }
-
-        // You can use print statements as follows for debugging, they'll be visible when running tests.
-        System.err.println("Logs from your program will appear here!");
-
-        System.out.print(message.content().orElse(""));
     }
 }
