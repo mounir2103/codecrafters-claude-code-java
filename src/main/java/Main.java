@@ -1,6 +1,8 @@
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
 import com.openai.core.JsonValue;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openai.models.FunctionDefinition;
 import com.openai.models.FunctionParameters;
 import com.openai.models.chat.completions.ChatCompletion;
@@ -9,9 +11,11 @@ import com.openai.models.chat.completions.ChatCompletionTool;
 
 import java.util.List;
 import java.util.Map;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 public class Main {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         if (args.length < 2 || !"-p".equals(args[0])) {
             System.err.println("Usage: program -p <prompt>");
             System.exit(1);
@@ -62,9 +66,21 @@ public class Main {
             throw new RuntimeException("no choices in response");
         }
 
+        var message = response.choices().get(0).message();
+        var toolCalls = message.toolCalls();
+        if (toolCalls.isPresent() && !toolCalls.get().isEmpty()) {
+            var toolCall = toolCalls.get().get(0);
+            if ("Read".equals(toolCall.function().name())) {
+                JsonNode arguments = new ObjectMapper().readTree(toolCall.function().arguments());
+                String filePath = arguments.get("file_path").asText();
+                System.out.print(Files.readString(Path.of(filePath)));
+                return;
+            }
+        }
+
         // You can use print statements as follows for debugging, they'll be visible when running tests.
         System.err.println("Logs from your program will appear here!");
 
-        System.out.print(response.choices().get(0).message().content().orElse(""));
+        System.out.print(message.content().orElse(""));
     }
 }
